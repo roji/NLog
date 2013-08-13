@@ -360,7 +360,7 @@ namespace NLog.Targets
                 }
             }
 
-            if (this.AutoScroll)
+            if (this.AutoScroll && rtbx.GetPositionFromCharIndex(rtbx.TextLength - 1).Y <= rtbx.Height)
             {
                 rtbx.Select(rtbx.TextLength, 0);
                 rtbx.ScrollToCaret();
