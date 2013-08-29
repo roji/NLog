@@ -31,6 +31,8 @@
 // THE POSSIBILITY OF SUCH DAMAGE.
 // 
 
+using NLog.Common;
+
 #if !NET_CF && !MONO && !SILVERLIGHT
 
 namespace NLog.Targets
@@ -118,6 +120,7 @@ namespace NLog.Targets
         }
 
         private delegate void DelSendTheMessageToRichTextBox(string logMessage, RichTextBoxRowColoringRule rule);
+        private delegate void DelProcessMessages(AsyncLogEventInfo[] messages);
 
         private delegate void FormCloseDelegate();
 
@@ -259,6 +262,7 @@ namespace NLog.Targets
                 this.TargetRichTextBox = FormHelper.CreateRichTextBox(this.ControlName, this.TargetForm);
                 this.CreatedForm = true;
             }
+            this.TargetRichTextBox.Text += "Shay Online";
         }
 
         /// <summary>
@@ -274,38 +278,21 @@ namespace NLog.Targets
         }
 
         /// <summary>
+        /// Renders an array logging events.
+        /// </summary>
+        /// <param name="asyncLogEvents">Array of logging events.</param>
+        protected override void Write(AsyncLogEventInfo[] asyncLogEvents)
+        {
+            this.TargetRichTextBox.BeginInvoke(new DelProcessMessages(this.ProcessMessages), new object[] { asyncLogEvents });
+        }
+
+        /// <summary>
         /// Log message to RichTextBox.
         /// </summary>
         /// <param name="logEvent">The logging event.</param>
         protected override void Write(LogEventInfo logEvent)
         {
-            RichTextBoxRowColoringRule matchingRule = null;
-
-            foreach (RichTextBoxRowColoringRule rr in this.RowColoringRules)
-            {
-                if (rr.CheckCondition(logEvent))
-                {
-                    matchingRule = rr;
-                    break;
-                }
-            }
-
-            if (this.UseDefaultRowColoringRules && matchingRule == null)
-            {
-                foreach (RichTextBoxRowColoringRule rr in DefaultRowColoringRules)
-                {
-                    if (rr.CheckCondition(logEvent))
-                    {
-                        matchingRule = rr;
-                        break;
-                    }
-                }
-            }
-
-            if (matchingRule == null)
-            {
-                matchingRule = RichTextBoxRowColoringRule.Default;
-            }
+            RichTextBoxRowColoringRule matchingRule = GetRuleForEvent(logEvent);
             
             string logMessage = this.Layout.Render(logEvent);
 
@@ -365,6 +352,84 @@ namespace NLog.Targets
                 rtbx.Select(rtbx.TextLength, 0);
                 rtbx.ScrollToCaret();
             }
+        }
+
+        private void ProcessMessages(AsyncLogEventInfo[] asyncEvents)
+        {
+            RichTextBox rtbx = this.TargetRichTextBox;
+
+            int startIndex = rtbx.Text.Length;
+
+            rtbx.SelectionStart = startIndex;
+            foreach (AsyncLogEventInfo asyncLogEvent in asyncEvents)
+            {
+                LogEventInfo logEvent = asyncLogEvent.LogEvent;
+
+                string message;
+                try
+                {
+                    message = this.Layout.Render(logEvent);
+                }
+                catch (Exception e)
+                {
+                    InternalLogger.Error("Error while rendering layout for line: " + e.Message);
+                    continue;
+                }
+
+                RichTextBoxRowColoringRule rule = GetRuleForEvent(logEvent);
+                rtbx.SelectionBackColor = GetColorFromString(rule.BackgroundColor, rtbx.BackColor);
+                rtbx.SelectionColor = GetColorFromString(rule.FontColor, rtbx.ForeColor);
+                rtbx.SelectionFont = new Font(rtbx.SelectionFont, rtbx.SelectionFont.Style ^ rule.Style);
+                rtbx.AppendText(message + "\n");
+            }
+            rtbx.SelectionLength = rtbx.Text.Length - rtbx.SelectionStart;
+
+            // find word to color
+            foreach (RichTextBoxWordColoringRule wordRule in this.WordColoringRules) {
+                MatchCollection mc = wordRule.CompiledRegex.Matches(rtbx.Text, startIndex);
+                foreach (Match m in mc) {
+                    rtbx.SelectionStart = m.Index;
+                    rtbx.SelectionLength = m.Length;
+                    rtbx.SelectionBackColor = GetColorFromString(wordRule.BackgroundColor, rtbx.BackColor);
+                    rtbx.SelectionColor = GetColorFromString(wordRule.FontColor, rtbx.ForeColor);
+                    rtbx.SelectionFont = new Font(rtbx.SelectionFont, rtbx.SelectionFont.Style ^ wordRule.Style);
+                }
+            }
+
+            if (this.MaxLines > 0) {
+                this.lineCount++;
+                if (this.lineCount > this.MaxLines) {
+                    int pos = rtbx.GetFirstCharIndexFromLine(1);
+                    rtbx.Select(0, pos);
+                    rtbx.SelectedText = string.Empty;
+                    this.lineCount--;
+                }
+            }
+
+            if (this.AutoScroll) {
+                rtbx.Select(rtbx.TextLength, 0);
+                rtbx.ScrollToCaret();
+            }
+        }
+
+        private RichTextBoxRowColoringRule GetRuleForEvent(LogEventInfo logEvent)
+        {
+            foreach (RichTextBoxRowColoringRule rr in this.RowColoringRules)
+            {
+                if (rr.CheckCondition(logEvent))
+                    return rr;
+            }
+
+            if (this.UseDefaultRowColoringRules)
+            {
+                foreach (RichTextBoxRowColoringRule rr in DefaultRowColoringRules)
+                {
+                    if (rr.CheckCondition(logEvent))
+                        return rr;
+                }
+            }
+
+            return RichTextBoxRowColoringRule.Default;
         }
     }
 }
